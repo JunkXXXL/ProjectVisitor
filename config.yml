@@ -1,0 +1,18 @@
+Application:
+  observe-folders: ["D:/SibCenter/ProjectVisitor", "D:/SibCenter/AndWork"]
+
+ExportersFormats:
+  ProjectExportVisitor:
+    formats: [".doc", ".docx", ".pdf"]
+  PythonExportVisitor:
+    formats: [".py", ".txt"]
+
+BD:
+  mysql:
+    host: "localhost"
+    port: "5455"
+    password: "infini_rag_flow"
+  elastic:
+    host: "localhost"
+    port: "9221"
+    password: "infini_rag_flow"
