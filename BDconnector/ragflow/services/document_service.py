@@ -1,4 +1,5 @@
 from BDconnector.ragflow.db_ragflow import Document
+from BDconnector.ragflow.services.knowledgebase_service import KnowledgebaseService
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -87,6 +88,57 @@ class DocumentService:
         return Document.from_row(row_dict)
 
     @staticmethod
+    def get_embd_id(cursor, id_: str):
+        query = ("SELECT kb.embd_id FROM knowledgebase kb"
+                 "JOIN document d ON kb.id = d.kb_id"
+                 "WHERE d.id = %s")
+        data = (id_,)
+        cursor.execute(query, data)
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+        cursor.fetchall()
+
+        return row[0]
+
+    @staticmethod
+    def get_by_id(cursor, id_: str):
+        query = "SELECT * FROM document WHERE id = %s"
+        data = (id_,)
+        cursor.execute(query, data)
+
+        columns = [col[0] for col in cursor.description]
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        row_dict = dict(zip(columns, row))
+        cursor.fetchall()
+
+        return Document.from_row(row_dict)
+
+    @staticmethod
+    def get_tenant_id(cursor, document_id: str) -> str | None:
+        query = """
+                SELECT kb.tenant_id
+                FROM knowledgebase kb
+                JOIN document d ON kb.id = d.kb_id
+                WHERE kb.id = %s;
+                """
+        data = (document_id,)
+        cursor.execute(query, data)
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        cursor.fetchall()
+
+        return row[0]
+
+    @staticmethod
     def update_file(cursor, document_id: str):
         current_time = datetime.now(tz=timezone.utc).timestamp()
         current_date = datetime.now(tz=timezone.utc)
@@ -94,3 +146,14 @@ class DocumentService:
         data = (current_time, current_date, document_id)
 
         cursor.execute(query, data)
+
+    @staticmethod
+    def increment_chunk_num(cursor, doc_id, kb_id, token_num, chunk_num):
+        document = DocumentService.get_by_id(cursor, doc_id)
+        query = "UPDATE document SET token_num=%s chunk_num=%s WHERE id=%s"
+        data = (document.token_num + token_num,
+                document.chunk_num + chunk_num,
+                document.id)
+        cursor.execute(query, data)
+        KnowledgebaseService.increment_chunk_num(cursor, kb_id, token_num, chunk_num)
+

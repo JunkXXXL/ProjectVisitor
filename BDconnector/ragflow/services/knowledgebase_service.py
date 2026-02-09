@@ -98,3 +98,14 @@ class KnowledgebaseService:
 
         return Knowledgebase.from_row(row_dict)
 
+    @staticmethod
+    def increment_chunk_num(cursor, kb_id, token_num, chunk_num):
+        kb = KnowledgebaseService.get_by_id(cursor, kb_id)
+        query = "UPDATE document SET token_num=%s chunk_num=%s WHERE id=%s"
+        data = (kb.token_num + token_num,
+                kb.chunk_num + chunk_num,
+                kb.id)
+
+        cursor.execute(query, data)
+
+
