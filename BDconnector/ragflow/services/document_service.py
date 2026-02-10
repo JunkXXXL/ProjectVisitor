@@ -125,7 +125,7 @@ class DocumentService:
                 SELECT kb.tenant_id
                 FROM knowledgebase kb
                 JOIN document d ON kb.id = d.kb_id
-                WHERE kb.id = %s;
+                WHERE d.id = %s;
                 """
         data = (document_id,)
         cursor.execute(query, data)
