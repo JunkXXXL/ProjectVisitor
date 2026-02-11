@@ -4,8 +4,6 @@ from ..db_ragflow import File2Document
 class File2DocumentService:
     @staticmethod
     def connect_knowledgebase_file(cursor, file_id: str, document_id: str):
-
-
         file2doc = File2Document(
             file_id=file_id,
             document_id=document_id

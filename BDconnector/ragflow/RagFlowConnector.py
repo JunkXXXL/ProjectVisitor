@@ -21,9 +21,9 @@ class RagFlowConnector(BDConnector):
     def __enter__(self):
         try:
             self.cnx = mysql.connector.connect(user='root', password=self.bd_password,
-                                          host=self.bd_host,
-                                          port=self.bd_port,
-                                          database="rag_flow")
+                                               host=self.bd_host,
+                                               port=self.bd_port,
+                                               database="rag_flow")
         except mysql.connector.Error as err:
             if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
                 raise mysql.connector.Error("Something is wrong with your user name or password")
@@ -88,8 +88,6 @@ class RagFlowConnector(BDConnector):
             self.cnx.commit()
 
     def update_document(self, document_path: Path):
-        tenant_id = "b2706914dcb311f0a16dba71510c7ad1"
-        created_by = "b2706914dcb311f0a16dba71510c7ad1"
 
         with self.cnx.cursor() as cursor:
             document = DocumentService.get_by_name(cursor, str(document_path))
