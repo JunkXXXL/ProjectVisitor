@@ -9,17 +9,22 @@ from VectorStorage.IEmbedder import EmbedderOpenAI
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 import os
+from Filler.RagFlowFiller import RagFlowFiller
 
 load_dotenv()
 
 class Application:
-    def __init__(self, visitor: type(ProjectExportVisitor)):
+    def __init__(self):
         self.folders = []
-        self.visitor = visitor
+        self.visitor = PythonExportVisitor()
         with open("config.yml", 'r') as fl:
             folders = yaml.safe_load(fl)["Application"]["observe-folders"]
             for folder_path in folders:
                 self.folders.append(StandardFolder(folder_path))
+
+        OAK = os.getenv("OPEN_AI_KEY")
+        el_connector = ElasticConnector(EmbedderOpenAI(OAK))
+        self.filler = RagFlowFiller(el_connector)
 
     def add_folder(self, folder: IFolder):
         self.folders.append(folder)
@@ -36,13 +41,22 @@ class Application:
         changed_files = []
         for folder in self.folders:
             changed = folder.accept(self.visitor)
-            changed_files.extend(changed)
+            changed_files.append([changed, folder])
         return changed_files
+
+    def load(self):
+        modifications = self.check_modifications()
+        for modified_project in modifications:
+
+            project_name = modified_project[1]
+            self.filler.add_document(project_name, modified_project[0])
+        #self.filler.add_document()
 
 
 class Context:
     def __init__(self):
         OAK = os.getenv("OPEN_AI_KEY")
+
         self.el_conn = ElasticConnector(EmbedderOpenAI(OAK))
 
     def test(self):
@@ -73,21 +87,15 @@ class Context:
 
 
 if __name__ == '__main__':
-    c = Context()
-    c.test()
+    # c = Context()
+    # c.test()
+    #
+    # exit()
+    # with RagFlowConnector() as c:
+    #     c.add_knowledgebase("yadedinside")
+    #     c.add_document(Path("abc.txt"), "yadedinside")
+    # exit()
 
-    exit()
-    with RagFlowConnector() as c:
-        c.add_knowledgebase("yadedinside")
-        c.add_document(Path("abc.txt"), "yadedinside")
-    exit()
-
-    visitor = PythonExportVisitor()
-    app = Application(visitor)
-    print(app.check_modifications())
-
-    strange_file = StandardFolder("D:\SibCenter\ProjectVisitor\Folder\AAO.txt")
-    strange_file.write_text("HA RA SHO ")
-
-    print(app.check_modifications())
+    app = Application()
+    app.load()
 

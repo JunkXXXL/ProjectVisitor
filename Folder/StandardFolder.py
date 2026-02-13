@@ -28,6 +28,6 @@ class StandardFolder(IFolder):
             file: Path = queue_files.get()
             is_changed = visitor.visit_standard_folder(file)
             if is_changed:
-                changed_files.append(str(file))
+                changed_files.append(file)
         return changed_files
 

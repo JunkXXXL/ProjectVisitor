@@ -59,7 +59,7 @@ class ElasticConnector:
             v, c = embd_mdl.encode(doc.name + " " + req["content_with_weight"])
             v = 0.1 * v[0] + 0.9 * v[1]
             d["q_%d_vec" % len(v)] = v.tolist()
-            print(self.update(f"ragflow_{tenant_id}", req["chunk_id"], d))
+            self.update(f"ragflow_{tenant_id}", req["chunk_id"], d)
             cursor.close()
             return True
         except Exception as e:
@@ -119,7 +119,7 @@ class ElasticConnector:
             DocumentService.increment_chunk_num(
                 cursor, doc.id, doc.kb_id, c, 1)
             cursor.close()
-            return {"chunk_id": chunk_id}
+            return chunk_id
         except Exception as e:
             cursor.close()
             print(e)
@@ -173,20 +173,35 @@ class ElasticConnector:
         except Exception as e:
             raise Exception(f"ESConnection.update(index={indexName}, id={chunkId}, doc={json.dumps(newValue, ensure_ascii=False)}) got exception")
 
-    def delete_document(self, doc_id: str, index_name: str):
+    def delete_chunk(self, chunk_id: str, index_name: str):
         try:
             response = self.es.delete(
                 index=index_name,
-                id=doc_id,
+                id=chunk_id,
                 refresh=True  # Делает удаление мгновенно видимым для поиска
             )
             return response
 
         except NotFoundError as e:
             # Если документа нет, выбрасываем ValueError (ошибка в логике/ID)
-            raise ValueError(f"Ошибка: Документ с ID '{doc_id}' не найден в индексе '{index_name}'.") from e
+            raise ValueError(f"Ошибка: Документ с ID '{chunk_id}' не найден в индексе '{index_name}'.") from e
 
         except Exception as e:
             # Общий сбой (проблемы с сетью, авторизацией и т.д.)
-            raise RuntimeError(f"Критическая ошибка при попытке удаления документа '{doc_id}': {e}") from e
+            raise RuntimeError(f"Критическая ошибка при попытке удаления документа '{chunk_id}': {e}") from e
 
+    def get_doc_chunks(self, doc_id: str, kb_id: str, index_name: str) -> list[str]:
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"doc_id": doc_id}},
+                        {"term": {"kb_id": kb_id}}
+                    ]
+                }
+            }
+        }
+
+        result = self.es.search(index=index_name, body=query)
+        ids = [hit['_id'] for hit in result['hits']['hits']]
+        return ids

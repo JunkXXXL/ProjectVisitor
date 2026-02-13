@@ -71,9 +71,9 @@ class DocumentService:
         return new_file.id
 
     @staticmethod
-    def get_by_name(cursor, document_name: str):
-        query = "SELECT * FROM document WHERE name = %s"
-        data = (document_name,)
+    def get_by_name(cursor, document_name: str, kb_id: str):
+        query = "SELECT * FROM document WHERE name = %s and kb_id = %s"
+        data = (document_name, kb_id)
         cursor.execute(query, data)
 
         columns = [col[0] for col in cursor.description]
@@ -150,7 +150,7 @@ class DocumentService:
     @staticmethod
     def increment_chunk_num(cursor, doc_id, kb_id, token_num, chunk_num):
         document = DocumentService.get_by_id(cursor, doc_id)
-        query = "UPDATE document SET token_num=%s chunk_num=%s WHERE id=%s"
+        query = "UPDATE document SET token_num=%s, chunk_num=%s WHERE id=%s"
         data = (document.token_num + token_num,
                 document.chunk_num + chunk_num,
                 document.id)

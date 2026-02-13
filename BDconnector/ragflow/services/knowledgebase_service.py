@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 class KnowledgebaseService:
     @staticmethod
-    def add_knowledgebase(cursor, knowledgebase_name: str, tenant_id: str, user_id: str):
+    def add_knowledgebase(cursor, knowledgebase_name: str, tenant_id: str, user_id: str) -> Knowledgebase:
         """
         Создает объект Knowledgebase и сохраняет его в БД через переданный курсор.
         """
@@ -65,7 +65,7 @@ class KnowledgebaseService:
         )
 
         cursor.execute(query, data)
-        return new_kb.id
+        return new_kb
 
     @staticmethod
     def get_by_id(cursor, id_: str):
@@ -101,7 +101,7 @@ class KnowledgebaseService:
     @staticmethod
     def increment_chunk_num(cursor, kb_id, token_num, chunk_num):
         kb = KnowledgebaseService.get_by_id(cursor, kb_id)
-        query = "UPDATE document SET token_num=%s chunk_num=%s WHERE id=%s"
+        query = "UPDATE document SET token_num=%s, chunk_num=%s WHERE id=%s"
         data = (kb.token_num + token_num,
                 kb.chunk_num + chunk_num,
                 kb.id)

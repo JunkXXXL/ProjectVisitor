@@ -1,5 +1,6 @@
 Application:
-  observe-folders: ["D:/SibCenter/ProjectVisitor", "D:/SibCenter/AndWork"]
+  observe-folders: ["D:/SibCenter/ProjectVisitor/test/testApplication",
+                    "D:/SibCenter/ProjectVisitor/test/testApplication2"]
 
 ExportersFormats:
   ProjectExportVisitor:
