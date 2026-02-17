@@ -23,7 +23,6 @@ class RagFlowFiller:
                 try:
                     is_exist, doc = c.is_document_exist(project_folder.name, file)
                     if is_exist:
-                        print("exist!!")
                         index_name = "ragflow_" + kb.tenant_id
                         chunks_id = self.el.get_doc_chunks(doc.id, kb.id, index_name)
                         doc_id = doc.id
