@@ -2,17 +2,49 @@ from typing import List
 from openai import OpenAI
 # import tiktoken
 from sentence_transformers import SentenceTransformer
+from elasticsearch import helpers
 from pathlib import Path
 import os
+import re
 
+
+BATCH_SIZE = 16
 
 encoding = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", cache_folder="D:/huggingface/")
 
-def get_embedding_with_usage(texts, model="text-embedding-3-small"):
+def get_embedding_with_usage(texts):
     # 1. Выбираем кодировщик для конкретной модели
     # Для всех новых моделей эмбеддингов OpenAI используется cl100k_base
-    tokens = encoding.encode(texts)
+    tokens = encoding.encode(texts, batch_size=BATCH_SIZE)
     return tokens
+
+
+def clean_article_text(text: str) -> str:
+    # удаление DOI
+    text = re.sub(r"10\.\d{4,9}/\S+", " ", text)
+
+    # удаление строк копирайта
+    text = re.sub(r"c⃝.*?\n", " ", text)
+
+    # удаление оглавления с точками
+    text = re.sub(r"(\.\s*){2,}", " ", text)
+
+    # удаление одиночных чисел (номера страниц)
+    text = re.sub(r"\n\s*\d+\s*\n", "\n", text)
+
+    # удаление переносов слов (abra-\nsive -> abrasive)
+    text = re.sub(r"-\s*\n\s*", "", text)
+
+    # объединение строк внутри абзаца
+    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+
+    # удаление лишних пробелов
+    text = re.sub(r"\s+", " ", text)
+
+    # нормализация абзацев
+    text = re.sub(r"\n{2,}", "\n\n", text)
+
+    return text.strip()
 
 
 def collect_pdf_paths(root_dir_path):
@@ -65,29 +97,56 @@ def chunk_text(
 
 model = OpenAI(api_key=os.getenv("OPEN_AI_KEY"))
 
-
-def embed_text(text: List[str]) -> List[List[float]]:
-    """
-    Получает список строк и возвращает список эмбеддингов.
-    """
-    embeddings = get_embedding_with_usage(text)
-    return embeddings
-
 from elasticsearch import Elasticsearch
 import json
 
 
-def create_index(es: Elasticsearch, index_name: str, dim: int = 384):
+def create_index_books(es: Elasticsearch, index_name: str, dim: int = 384):
     if es.indices.exists(index=index_name):
         return
 
     mappings = {
         "properties": {
-            "text": {"type": "text"},
-            "doc_id": {"type": "keyword"},
-            "text_vector": {
+            "id": {
+                "type": "keyword"
+            },
+            "file_name": {
+                "type": "text"
+            },
+            "tags": {
+                "type": "keyword"
+            },
+            "vector": {
                 "type": "dense_vector",
-                "dims": dim,
+                "dims": dim
+            }
+        }
+    }
+
+    es.indices.create(index=index_name, mappings=mappings)
+
+
+def create_index_chunks(es: Elasticsearch, index_name: str, dim: int = 384):
+    if es.indices.exists(index=index_name):
+        return
+
+    mappings = {
+        "properties": {
+            "id": {
+                "type": "keyword"
+            },
+            "text": {
+                "type": "text"
+            },
+            "file_name": {
+                "type": "keyword"
+            },
+            "tags": {
+                "type": "keyword"
+            },
+            "vector": {
+                "type": "dense_vector",
+                "dims": dim
             }
         }
     }
@@ -100,35 +159,52 @@ def create_index(es: Elasticsearch, index_name: str, dim: int = 384):
     es.indices.create(index=index_name, mappings=mappings)
 
 
-from elasticsearch.helpers import bulk
 import uuid
 
 
-def index_chunks(
-        es: Elasticsearch,
-        index_name: str,
-        doc_id: str,
-        chunks: List[str]
+def insert_chunk_records_bulk(
+    elastic_search_conn,
+    index_name: str,
+    texts: list[str],
+    file_name: str
 ):
-    embeddings = []
-    for chunk in chunks:
-        embedded = embed_text([chunk])
-        embeddings.append(embedded[0])
-
     actions = []
-    for chunk, vector in zip(chunks, embeddings):
-        action = {
+
+    vectors = get_embedding_with_usage(texts)
+    for vector, text in zip(vectors, texts):
+
+        actions.append({
             "_index": index_name,
             "_id": str(uuid.uuid4()),
             "_source": {
-                "doc_id": doc_id,
-                "text": chunk,
-                "text_vector": vector
+                "id": str(uuid.uuid4()),
+                "text": text,
+                "file_name": file_name,
+                "vector": vector
             }
-        }
-        actions.append(action)
+        })
 
-    bulk(es, actions)
+    helpers.bulk(elastic_search_conn, actions)
+
+
+def insert_file_record(
+    elastic_search_conn,
+    index_name: str,
+    text: str,
+    file_name: str
+):
+    vector = get_embedding_with_usage([text])[0]
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "file_name": file_name,
+        "vector": vector
+    }
+
+    elastic_search_conn.index(
+        index=index_name,
+        document=doc
+    )
 
 
 def hybrid_search(
@@ -137,7 +213,7 @@ def hybrid_search(
         query: str,
         k: int = 5
 ):
-    query_vector = embed_texts([query])[0]
+    query_vector = get_embedding_with_usage([query])[0]
 
     body = {
         "size": k,
@@ -164,3 +240,69 @@ def hybrid_search(
 
     response = es.search(index=index_name, body=body)
     return response["hits"]["hits"]
+
+def search_files_by_vector(
+    elastic_search_conn,
+    index_name: str,
+    query_text: str,
+    top_k: int = 5
+):
+    query_vector = get_embedding_with_usage([query_text])[0]
+
+    query = {
+        "knn": {
+            "field": "vector",
+            "query_vector": query_vector,
+            "k": top_k,
+            "num_candidates": 50
+        },
+        "_source": ["file_name"]
+    }
+
+    resp = elastic_search_conn.search(
+        index=index_name,
+        body=query
+    )
+
+    file_names = [hit["_source"]["file_name"] for hit in resp["hits"]["hits"]]
+    return file_names
+
+def hybrid_search_chunks(
+    elastic_search_conn,
+    index_name: str,
+    query_text: str,
+    file_names: list[str],
+    top_k: int = 10
+):
+    query_vector = get_embedding_with_usage([query_text])[0]
+
+    query = {
+        "size": top_k,
+        "query": {
+            "script_score": {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"match": {"text": query_text}}
+                        ],
+                        "filter": [
+                            {"terms": {"file_name": file_names}}
+                        ]
+                    }
+                },
+                "script": {
+                    "source": "cosineSimilarity(params.query_vector, 'vector') + 1.0",
+                    "params": {
+                        "query_vector": query_vector
+                    }
+                }
+            }
+        }
+    }
+
+    resp = elastic_search_conn.search(
+        index=index_name,
+        body=query
+    )
+
+    return resp["hits"]["hits"]
