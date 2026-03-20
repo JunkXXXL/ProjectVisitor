@@ -3,12 +3,14 @@ from Visitor.IVisitor import IVisitor
 from queue import Queue
 from pathlib import Path
 from typing import List
+from observability import get_metrics_logger, log_event
 
 
 class StandardFolder(IFolder):
     def accept(self, visitor: IVisitor) -> List:
+        logger = get_metrics_logger("filesystem")
         if not self.exists():
-            print(f"пути {str(self.absolute())} не существует")
+            log_event(logger, "observed_folder_missing", folder_path=str(self.absolute()))
             return []
 
         queue_folders = Queue()
@@ -30,4 +32,3 @@ class StandardFolder(IFolder):
             if is_changed:
                 changed_files.append(file)
         return changed_files
-
