@@ -1,4 +1,3 @@
-from typing import List
 from pathlib import Path
 from Visitor import ProjectExportVisitor, PythonExportVisitor
 from Folder import IFolder, StandardFolder
@@ -10,11 +9,14 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import os
 from Filler.RagFlowFiller import RagFlowFiller
+from observability import get_metrics_logger, log_event, measure_time, get_cpu_load_percent
 
 load_dotenv()
 
+
 class Application:
     def __init__(self):
+        self.logger = get_metrics_logger("application")
         self.folders = []
         self.visitor = PythonExportVisitor()
         with open("config.yml", 'r') as fl:
@@ -45,12 +47,38 @@ class Application:
         return changed_files
 
     def load(self):
-        modifications = self.check_modifications()
-        for modified_project in modifications:
-
-            project_name = modified_project[1]
-            self.filler.add_document(project_name, modified_project[0])
-        #self.filler.add_document()
+        log_event(
+            self.logger,
+            "user_request_received",
+            request_type="project_scan",
+            observed_projects=len(self.folders),
+            cpu_load_percent=get_cpu_load_percent(),
+        )
+        processed_projects = 0
+        with measure_time(
+            self.logger,
+            "application_runtime",
+            projects_total=len(self.folders),
+        ):
+            modifications = self.check_modifications()
+            for modified_project in modifications:
+                project_name = modified_project[1]
+                files_to_process = modified_project[0]
+                with measure_time(
+                    self.logger,
+                    "project_processing_time",
+                    project_name=project_name.name,
+                    files_detected=len(files_to_process),
+                    cpu_load_percent=get_cpu_load_percent(),
+                ):
+                    self.filler.add_document(project_name, files_to_process)
+                processed_projects += 1
+                log_event(
+                    self.logger,
+                    "processed_projects_total",
+                    processed_projects=processed_projects,
+                    project_name=project_name.name,
+                )
 
 
 class Context:
@@ -60,7 +88,6 @@ class Context:
         self.el_conn = ElasticConnector(EmbedderOpenAI(OAK))
 
     def test(self):
-        #print("check_index_exists:", self.el_conn.check_index_exists("ragflow_b2706914dcb311f0a16dba71510c7ad1"))
         document = [{
             "id": 1, "content_ltks": "Русские перцы",
             "content_with_weight": "Русские перцы",
@@ -73,29 +100,15 @@ class Context:
             "doc_id": "4b25f863dcd244d089729df753075e60",
             "q_1536_vec": [0.5]*1536
         }]
-        #print(self.el_conn.insert(document, "ragflow_b2706914dcb311f0a16dba71510c7ad1", "4cad705c1c4546b883a7e37656aab5be"))
         document[0]["content_with_weight"] = "Русские перцы>?>?>>?"
-        #print(self.el_conn.update(1, document[0], "ragflow_b2706914dcb311f0a16dba71510c7ad1"))
-        #print(self.el_conn.delete_document(1, "ragflow_b2706914dcb311f0a16dba71510c7ad1"))
         document = {"doc_id": "af176956dcb411f0b9ddba71510c7ad1",
                     "content_with_weight": "русккие перцы22"}
         document2 = {"chunk_id": "ae592ff9d044a3c2", "doc_id": "af176956dcb411f0b9ddba71510c7ad1",
                     "content_with_weight": "русккие перцы22"}
         with RagFlowConnector() as c:
-            #print(self.el_conn.add_chuck(c, document))
             print(self.el_conn.update_chunk(c, document2))
 
 
 if __name__ == '__main__':
-    # c = Context()
-    # c.test()
-    #
-    # exit()
-    # with RagFlowConnector() as c:
-    #     c.add_knowledgebase("yadedinside")
-    #     c.add_document(Path("abc.txt"), "yadedinside")
-    # exit()
-
     app = Application()
     app.load()
-

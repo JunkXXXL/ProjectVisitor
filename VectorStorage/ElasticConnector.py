@@ -7,6 +7,7 @@ import xxhash
 import yaml
 import copy
 import json
+from observability import get_metrics_logger, log_event, measure_time
 
 
 class ElasticConnector:
@@ -17,6 +18,7 @@ class ElasticConnector:
             basic_auth = ['user', config["BD"]["elastic"]["password"]]
         self.es = Elasticsearch(hosts=host, basic_auth=basic_auth, verify_certs=False)
         self.embedder = embedder
+        self.logger = get_metrics_logger("elastic")
 
     def update_chunk(self, connector, req: dict):
         cursor = connector.cnx.cursor()
@@ -56,12 +58,21 @@ class ElasticConnector:
                 cursor.close()
                 raise ValueError("Document not found!")
 
-            v, c = embd_mdl.encode(doc.name + " " + req["content_with_weight"])
-            v = 0.1 * v[0] + 0.9 * v[1]
-            d["q_%d_vec" % len(v)] = v.tolist()
+            embedding_text = doc.name + " " + req["content_with_weight"]
+            vector, token_count = embd_mdl.encode(
+                embedding_text,
+                metadata={
+                    "doc_id": req["doc_id"],
+                    "chunk_id": req["chunk_id"],
+                    "document_path": req.get("document_path", doc.name),
+                    "project_name": req.get("project_name"),
+                }
+            )
+            vector = 0.1 * vector[0] + 0.9 * vector[1]
+            d["q_%d_vec" % len(vector)] = vector.tolist()
             self.update(f"ragflow_{tenant_id}", req["chunk_id"], d)
             cursor.close()
-            return True
+            return True, token_count
         except Exception as e:
             cursor.close()
             raise Exception(e)
@@ -110,24 +121,33 @@ class ElasticConnector:
                 raise ValueError("Knowledgebase not found!")
 
             embd_mdl = self.embedder
-
-            v, c = embd_mdl.encode(doc.name + " " + req["content_with_weight"])
-            v = 0.1 * v[0] + 0.9 * v[1]
-            d["q_%d_vec" % len(v)] = v.tolist()
+            embedding_text = doc.name + " " + req["content_with_weight"]
+            vector, token_count = embd_mdl.encode(
+                embedding_text,
+                metadata={
+                    "doc_id": req["doc_id"],
+                    "chunk_id": chunk_id,
+                    "document_path": req.get("document_path", doc.name),
+                    "project_name": req.get("project_name"),
+                }
+            )
+            vector = 0.1 * vector[0] + 0.9 * vector[1]
+            d["q_%d_vec" % len(vector)] = vector.tolist()
             self.insert([d], f"ragflow_{tenant_id}", doc.kb_id)
 
             DocumentService.increment_chunk_num(
-                cursor, doc.id, doc.kb_id, c, 1)
+                cursor, doc.id, doc.kb_id, token_count, 1)
             cursor.close()
-            return chunk_id
+            return chunk_id, token_count
         except Exception as e:
             cursor.close()
-            print(e)
+            log_event(self.logger, "elastic_chunk_write_failed", error=str(e), doc_id=req.get("doc_id"), chunk_id=chunk_id)
             raise e
 
     def check_index_exists(self, indexName: str):
         try:
-            return self.es.indices.exists(index=indexName)
+            with measure_time(self.logger, "elastic_response_time", operation="indices.exists", index_name=indexName):
+                return self.es.indices.exists(index=indexName)
         except Exception as e:
             raise ConnectionError(f"Невозможно выполнить функцию check_index_exists, соединение с elastic разорвано. "
                                   f"Error: {e}")
@@ -144,8 +164,10 @@ class ElasticConnector:
 
         try:
             res = []
-            r = self.es.bulk(index=indexName, operations=operations,
-                             refresh=False, timeout="60s")
+            with measure_time(self.logger, "elastic_response_time", operation="bulk", index_name=indexName,
+                              documents_count=len(documents)):
+                r = self.es.bulk(index=indexName, operations=operations,
+                                 refresh=False, timeout="60s")
             if re.search(r"False", str(r["errors"]), re.IGNORECASE):
                 return res
 
@@ -161,33 +183,35 @@ class ElasticConnector:
     def update(self, indexName: str, chunkId, newValue: dict) -> bool:
         try:
             newValue.pop("id")
-            response = self.es.update(
-                index=indexName,
-                id=chunkId,
-                body={"doc": newValue},
-                refresh=True  # refresh=True делает изменения видимыми для поиска сразу
-            )
+            with measure_time(self.logger, "elastic_response_time", operation="update", index_name=indexName,
+                              chunk_id=chunkId):
+                response = self.es.update(
+                    index=indexName,
+                    id=chunkId,
+                    body={"doc": newValue},
+                    refresh=True
+                )
             return response
         except NotFoundError:
-            raise f"Документ с id {chunkId} не найден"
-        except Exception as e:
+            raise ValueError(f"Документ с id {chunkId} не найден")
+        except Exception:
             raise Exception(f"ESConnection.update(index={indexName}, id={chunkId}, doc={json.dumps(newValue, ensure_ascii=False)}) got exception")
 
     def delete_chunk(self, chunk_id: str, index_name: str):
         try:
-            response = self.es.delete(
-                index=index_name,
-                id=chunk_id,
-                refresh=True  # Делает удаление мгновенно видимым для поиска
-            )
+            with measure_time(self.logger, "elastic_response_time", operation="delete", index_name=index_name,
+                              chunk_id=chunk_id):
+                response = self.es.delete(
+                    index=index_name,
+                    id=chunk_id,
+                    refresh=True
+                )
             return response
 
         except NotFoundError as e:
-            # Если документа нет, выбрасываем ValueError (ошибка в логике/ID)
             raise ValueError(f"Ошибка: Документ с ID '{chunk_id}' не найден в индексе '{index_name}'.") from e
 
         except Exception as e:
-            # Общий сбой (проблемы с сетью, авторизацией и т.д.)
             raise RuntimeError(f"Критическая ошибка при попытке удаления документа '{chunk_id}': {e}") from e
 
     def get_doc_chunks(self, doc_id: str, kb_id: str, index_name: str) -> list[str]:
@@ -202,6 +226,8 @@ class ElasticConnector:
             }
         }
 
-        result = self.es.search(index=index_name, body=query)
+        with measure_time(self.logger, "elastic_response_time", operation="search", index_name=index_name,
+                          doc_id=doc_id, kb_id=kb_id):
+            result = self.es.search(index=index_name, body=query)
         ids = [hit['_id'] for hit in result['hits']['hits']]
         return ids
